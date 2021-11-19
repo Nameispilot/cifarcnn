@@ -3,7 +3,6 @@ package cifarcnn
 import (
 	"io/ioutil"
 	"os"
-	"path/filepath"
 
 	"github.com/pkg/errors"
 	"gorgonia.org/tensor"
@@ -18,24 +17,11 @@ func pixelWeight(px byte) float64 {
 	return retVal
 }
 
-func Load(typ, loc string) (tensor.Tensor, tensor.Tensor, error) {
-
-	var path string
-	switch typ {
-	case "train":
-		path = "data_batch_1.bin"
-	case "test":
-		path = "test_batch.bin"
-	}
-
+func Load(f *os.File) (tensor.Tensor, tensor.Tensor, error) {
 	// Create slices to store our data
 	var labels []uint8
 	var images []float64
 
-	f, err := os.Open(filepath.Join(loc, path))
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "Cannot open the file")
-	}
 	defer f.Close()
 
 	cifar, err := ioutil.ReadAll(f)
