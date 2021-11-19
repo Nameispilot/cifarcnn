@@ -70,13 +70,10 @@ func main() {
 	solver := gorgonia.NewRMSPropSolver(gorgonia.WithBatchSize(float64(bs)))
 
 	// training
-
-	var accuracyGuess float64
 	numExamples := inputs.Shape()[0]
 	batches := numExamples / bs
 	epochs := 10
 	for i := 0; i < epochs; i++ {
-		accuracyGuess = 0
 		for b := 0; b < batches; b++ {
 			start := b * bs
 			end := start + bs
@@ -108,7 +105,7 @@ func main() {
 			solver.Step(gorgonia.NodesToValueGrads(convnet.Learnables()))
 			tm.Reset()
 		}
-		log.Printf("Epoch %d | cost %v | acc %v", i, costVal, accuracyGuess)
+		log.Printf("Epoch %d | cost %v", i, costVal)
 
 	}
 
