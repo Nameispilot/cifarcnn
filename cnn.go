@@ -1,8 +1,6 @@
 package cifarcnn
 
 import (
-	"fmt"
-
 	"github.com/pkg/errors"
 
 	"gorgonia.org/gorgonia"
@@ -41,12 +39,11 @@ func (m *convnet) Learnables() gorgonia.Nodes {
 }
 
 func (m *convnet) Fwd(input *gorgonia.Node) error {
-	/*var c0, c1, c2, fc *gorgonia.Node
+	var c0, c1, c2, fc *gorgonia.Node
 	var a0, a1, a2, a3 *gorgonia.Node
 	var p0, p1, p2 *gorgonia.Node
-	var l0, l1, l2, l3 *gorgonia.Node */
+	var l0, l1, l2, l3 *gorgonia.Node
 	var err error
-	var c0, a0, p0, l0 *gorgonia.Node
 
 	// LAYER 0
 	// stride = (1, 1) and padding = (1, 1)
@@ -63,12 +60,74 @@ func (m *convnet) Fwd(input *gorgonia.Node) error {
 	if err != nil {
 		return errors.Wrap(err, "Cannot MaxPool Layer0")
 	}
-	//log.Printf("p0 shape %v", p0.Shape())
 	l0, err = gorgonia.Dropout(p0, m.d0)
 	if err != nil {
 		return errors.Wrap(err, "Cannot Dropout Layer0")
 	}
-	fmt.Println(l0)
+
+	// Layer 1
+	c1, err = gorgonia.Conv2d(l0, m.w1, kernelShape, []int{1, 1}, []int{1, 1}, []int{1, 1})
+	if err != nil {
+		return errors.Wrap(err, "Cannot conv2d Layer1")
+	}
+	a1, err = gorgonia.Rectify(c1)
+	if err != nil {
+		return errors.Wrap(err, "Cannot ReLU Layer1")
+	}
+	p1, err = gorgonia.MaxPool2D(a1, tensor.Shape{2, 2}, []int{0, 0}, []int{2, 2})
+	if err != nil {
+		return errors.Wrap(err, "Cannot MaxPool Layer1")
+	}
+	l1, err = gorgonia.Dropout(p1, m.d1)
+	if err != nil {
+		return errors.Wrap(err, "Cannot Dropout Layer1")
+	}
+
+	// Layer 2
+	c2, err = gorgonia.Conv2d(l1, m.w2, kernelShape, []int{1, 1}, []int{1, 1}, []int{1, 1})
+	if err != nil {
+		return errors.Wrap(err, "Cannot conv2d Layer2")
+	}
+	a2, err = gorgonia.Rectify(c2)
+	if err != nil {
+		return errors.Wrap(err, "Cannot ReLU Layer2")
+	}
+	p2, err = gorgonia.MaxPool2D(a2, tensor.Shape{2, 2}, []int{0, 0}, []int{2, 2})
+	if err != nil {
+		return errors.Wrap(err, "Cannot MaxPool Layer2")
+	}
+	var r2 *gorgonia.Node
+	b, c, h, w := p2.Shape()[0], p2.Shape()[1], p2.Shape()[2], p2.Shape()[3]
+	r2, err = gorgonia.Reshape(p2, tensor.Shape{b, c * h * w})
+	if err != nil {
+		return errors.Wrap(err, "Cannot Reshape Layer2")
+	}
+	l2, err = gorgonia.Dropout(r2, m.d2)
+	if err != nil {
+		return errors.Wrap(err, "Cannot Dropout Layer2")
+	}
+
+	// Layer 3
+	fc, err = gorgonia.Mul(l2, m.w3)
+	if err != nil {
+		return errors.Wrap(err, "Cannot multiplicate l2 and w3")
+	}
+	a3, err = gorgonia.Rectify(fc)
+	if err != nil {
+		return errors.Wrap(err, "Cannot activate fc")
+	}
+	l3, err = gorgonia.Dropout(a3, m.d3)
+	if err != nil {
+		return errors.Wrap(err, "Cannot Dropout Layer3")
+	}
+
+	// output decode
+	var out *gorgonia.Node
+	out, err = gorgonia.Mul(l3, m.w4)
+	if err != nil {
+		return errors.Wrap(err, "Cannot multiplicate l3 and w4")
+	}
+	m.out, err = gorgonia.SoftMax(out)
 
 	return nil
 }
