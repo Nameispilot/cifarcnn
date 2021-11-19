@@ -11,7 +11,7 @@ type convnet struct {
 	w0, w1, w2, w3, w4 *gorgonia.Node // layers weights
 	d0, d1, d2, d3     float64        // dropout probabilities
 
-	out *gorgonia.Node
+	Out *gorgonia.Node
 }
 
 func NewCNN(g *gorgonia.ExprGraph, batchSize, kernelSize, depth, outputSize int) *convnet {
@@ -127,7 +127,10 @@ func (m *convnet) Fwd(input *gorgonia.Node) error {
 	if err != nil {
 		return errors.Wrap(err, "Cannot multiplicate l3 and w4")
 	}
-	m.out, err = gorgonia.SoftMax(out)
+	m.Out, err = gorgonia.SoftMax(out)
+	if err != nil {
+		return errors.Wrap(err, "Cannot softmax output")
+	}
 
 	return nil
 }

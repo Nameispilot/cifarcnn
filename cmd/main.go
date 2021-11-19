@@ -27,21 +27,56 @@ func main() {
 	g := gorgonia.NewGraph()
 	convnet := cifarcnn.NewCNN(g, length, kernelSize, depth, classes)
 
-	bs := 50
+	bs := 100
 	x := gorgonia.NewTensor(g, tensor.Float64, 4, gorgonia.WithShape(bs, depth, length, length), gorgonia.WithName("x"))
 	y := gorgonia.NewMatrix(g, tensor.Float64, gorgonia.WithShape(bs, classes), gorgonia.WithName("y"))
 
+	// feed forward proccess
 	if err = convnet.Fwd(x); err != nil {
+		panic(err)
+	}
+
+	// Defining cost
+	var logprob, losses, cost *gorgonia.Node
+	logprob, err = gorgonia.Log(convnet.Out)
+	if err != nil {
+		panic(err)
+	}
+	losses, err = gorgonia.HadamardProd(logprob, y)
+	if err != nil {
+		panic(err)
+	}
+	cost, err = gorgonia.Sum(losses)
+	if err != nil {
+		panic(err)
+	}
+	cost, err = gorgonia.Neg(cost)
+	if err != nil {
+		panic(err)
+	}
+
+	// Track costs
+	var costVal gorgonia.Value
+	gorgonia.Read(cost, &costVal)
+
+	// Defining gradients
+	_, err = gorgonia.Grad(cost, convnet.Learnables()...)
+	if err != nil {
 		panic(err)
 	}
 
 	tm := gorgonia.NewTapeMachine(g, gorgonia.BindDualValues(convnet.Learnables()...))
 	defer tm.Close()
+	solver := gorgonia.NewRMSPropSolver(gorgonia.WithBatchSize(float64(bs)))
 
 	// training
+
+	var accuracyGuess float64
 	numExamples := inputs.Shape()[0]
 	batches := numExamples / bs
-	for i := 0; i < 10; i++ {
+	epochs := 10
+	for i := 0; i < epochs; i++ {
+		accuracyGuess = 0
 		for b := 0; b < batches; b++ {
 			start := b * bs
 			end := start + bs
@@ -69,7 +104,11 @@ func main() {
 			if err = tm.RunAll(); err != nil {
 				log.Fatalf("Failed at epoch  %d: %v", i, err)
 			}
+
+			solver.Step(gorgonia.NodesToValueGrads(convnet.Learnables()))
+			tm.Reset()
 		}
+		log.Printf("Epoch %d | cost %v | acc %v", i, costVal, accuracyGuess)
 
 	}
 

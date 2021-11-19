@@ -44,9 +44,9 @@ func Load(f *os.File) (tensor.Tensor, tensor.Tensor, error) {
 	for i := 0; i < len(labels); i++ {
 		for j := 0; j < numLabels; j++ {
 			if j == int(labels[i]) {
-				labelsBacking = append(labelsBacking, 1.0)
+				labelsBacking = append(labelsBacking, 0.9)
 			} else {
-				labelsBacking = append(labelsBacking, 0.0)
+				labelsBacking = append(labelsBacking, 0.1)
 			}
 		}
 	}
