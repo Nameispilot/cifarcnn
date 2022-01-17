@@ -1,135 +1,122 @@
 package cifarcnn
 
 import (
-	"github.com/pkg/errors"
+	"fmt"
 
+	"github.com/pkg/errors"
 	"gorgonia.org/gorgonia"
 	"gorgonia.org/tensor"
 )
 
-type convnet struct {
-	w0, w1, w2, w3, w4 *gorgonia.Node // layers weights
-	d0, d1, d2, d3     float64        // dropout probabilities
-
-	Out *gorgonia.Node
+type Convnet struct {
+	Name   string
+	Layers []*Layer
+	out    *gorgonia.Node
 }
 
-func NewCNN(g *gorgonia.ExprGraph, batchSize, kernelSize, depth, outputSize int) *convnet {
-	w0 := gorgonia.NewTensor(g, tensor.Float64, 4, gorgonia.WithShape(batchSize, depth, kernelSize, kernelSize), gorgonia.WithName("w0"), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
-	w1 := gorgonia.NewTensor(g, tensor.Float64, 4, gorgonia.WithShape(batchSize*2, batchSize, kernelSize, kernelSize), gorgonia.WithName("w1"), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
-	w2 := gorgonia.NewTensor(g, tensor.Float64, 4, gorgonia.WithShape(batchSize*4, batchSize*2, kernelSize, kernelSize), gorgonia.WithName("w2"), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
-	w3 := gorgonia.NewMatrix(g, tensor.Float64, gorgonia.WithShape(batchSize*16, batchSize*8), gorgonia.WithName("w3"), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
-	w4 := gorgonia.NewMatrix(g, tensor.Float64, gorgonia.WithShape(batchSize*8, outputSize), gorgonia.WithName("w4"), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
-	return &convnet{
-		w0: w0,
-		w1: w1,
-		w2: w2,
-		w3: w3,
-		w4: w4,
+func (net *Convnet) Out() *gorgonia.Node {
+	return net.out
+}
 
-		d0: 0.2,
-		d1: 0.2,
-		d2: 0.2,
-		d3: 0.55,
+func CNN(Layers ...*Layer) *Convnet {
+	return &Convnet{
+		Name:   "convnet",
+		Layers: Layers,
 	}
 }
 
-func (m *convnet) Learnables() gorgonia.Nodes {
-	return gorgonia.Nodes{m.w0, m.w1, m.w2, m.w3, m.w4}
+func (net *Convnet) Learnables() gorgonia.Nodes {
+	learnables := make(gorgonia.Nodes, 0, 2*len(net.Layers))
+	for _, l := range net.Layers {
+		if l != nil {
+			if l.Weights != nil {
+				learnables = append(learnables, l.Weights)
+			}
+			if l.Bias != nil {
+				learnables = append(learnables, l.Bias)
+			}
+		}
+	}
+	return learnables
 }
 
-func (m *convnet) Fwd(input *gorgonia.Node) error {
-	var c0, c1, c2, fc *gorgonia.Node
-	var a0, a1, a2, a3 *gorgonia.Node
-	var p0, p1, p2 *gorgonia.Node
-	var l0, l1, l2, l3 *gorgonia.Node
-	var err error
+func BuildCNN(g *gorgonia.ExprGraph, kernelSize, channels, labels int) *Convnet {
+	shp0 := tensor.Shape{5, channels, kernelSize, kernelSize}
+	w0 := gorgonia.NewTensor(g, gorgonia.Float64, 4, gorgonia.WithShape(shp0...), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
+	w1 := gorgonia.NewTensor(g, gorgonia.Float64, 2, gorgonia.WithShape(labels, 10), gorgonia.WithInit(gorgonia.GlorotN(1.0)))
+	convnet := CNN(
+		[]*Layer{
+			{
+				Type:       LayerConvolutional,
+				Weights:    w0,
+				Bias:       nil,
+				Activation: Rectify,
+				Extra: &Extra{
+					KernelHeight: kernelSize,
+					KernelWidth:  kernelSize,
+					Padding:      []int{1, 1},
+					Stride:       []int{1, 1},
+					Dilation:     []int{1, 1},
+				},
+			},
+			{
+				Type:       LayerDropout,
+				Activation: NoActivation,
+				Extra: &Extra{
+					Probability: 0.2,
+				},
+			},
+			{
+				Type:       LayerMaxpool,
+				Activation: NoActivation,
+				Extra: &Extra{
+					KernelHeight: kernelSize,
+					KernelWidth:  kernelSize,
+					Padding:      []int{0, 0},
+					Stride:       []int{2, 2},
+				},
+			},
+			{
+				Type:       LayerFlatten,
+				Activation: NoActivation,
+			},
+			{
+				Type:       LayerLinear,
+				Weights:    w1,
+				Bias:       nil,
+				Activation: SoftMax,
+			},
+		}...,
+	)
+	return convnet
 
-	// LAYER 0
-	// stride = (1, 1) and padding = (1, 1)
-	kernelShape := tensor.Shape{m.w0.Shape()[2], m.w0.Shape()[3]}
-	c0, err = gorgonia.Conv2d(input, m.w0, kernelShape, []int{1, 1}, []int{1, 1}, []int{1, 1})
-	if err != nil {
-		return errors.Wrap(err, "Cannot conv2d Layer0")
-	}
-	a0, err = gorgonia.Rectify(c0)
-	if err != nil {
-		return errors.Wrap(err, "Cannot ReLU Layer0")
-	}
-	p0, err = gorgonia.MaxPool2D(a0, tensor.Shape{2, 2}, []int{0, 0}, []int{2, 2})
-	if err != nil {
-		return errors.Wrap(err, "Cannot MaxPool Layer0")
-	}
-	l0, err = gorgonia.Dropout(p0, m.d0)
-	if err != nil {
-		return errors.Wrap(err, "Cannot Dropout Layer0")
-	}
+}
 
-	// Layer 1
-	c1, err = gorgonia.Conv2d(l0, m.w1, kernelShape, []int{1, 1}, []int{1, 1}, []int{1, 1})
+func (net *Convnet) Fwd(input *gorgonia.Node) error {
+	firstLayerToActivate, err := net.Layers[0].Fwd(input)
 	if err != nil {
-		return errors.Wrap(err, "Cannot conv2d Layer1")
+		return errors.Wrap(err, "Can't feedforward Layer 0")
 	}
-	a1, err = gorgonia.Rectify(c1)
+	firstLayerActivated, err := net.Layers[0].Activation(firstLayerToActivate)
 	if err != nil {
-		return errors.Wrap(err, "Cannot ReLU Layer1")
+		return errors.Wrap(err, "Can't apply activation function to Layer 0")
 	}
-	p1, err = gorgonia.MaxPool2D(a1, tensor.Shape{2, 2}, []int{0, 0}, []int{2, 2})
-	if err != nil {
-		return errors.Wrap(err, "Cannot MaxPool Layer1")
-	}
-	l1, err = gorgonia.Dropout(p1, m.d1)
-	if err != nil {
-		return errors.Wrap(err, "Cannot Dropout Layer1")
-	}
+	lastActivatedLayer := firstLayerActivated
 
-	// Layer 2
-	c2, err = gorgonia.Conv2d(l1, m.w2, kernelShape, []int{1, 1}, []int{1, 1}, []int{1, 1})
-	if err != nil {
-		return errors.Wrap(err, "Cannot conv2d Layer2")
-	}
-	a2, err = gorgonia.Rectify(c2)
-	if err != nil {
-		return errors.Wrap(err, "Cannot ReLU Layer2")
-	}
-	p2, err = gorgonia.MaxPool2D(a2, tensor.Shape{2, 2}, []int{0, 0}, []int{2, 2})
-	if err != nil {
-		return errors.Wrap(err, "Cannot MaxPool Layer2")
-	}
-	var r2 *gorgonia.Node
-	b, c, h, w := p2.Shape()[0], p2.Shape()[1], p2.Shape()[2], p2.Shape()[3]
-	r2, err = gorgonia.Reshape(p2, tensor.Shape{b, c * h * w})
-	if err != nil {
-		return errors.Wrap(err, "Cannot Reshape Layer2")
-	}
-	l2, err = gorgonia.Dropout(r2, m.d2)
-	if err != nil {
-		return errors.Wrap(err, "Cannot Dropout Layer2")
-	}
-
-	// Layer 3
-	fc, err = gorgonia.Mul(l2, m.w3)
-	if err != nil {
-		return errors.Wrap(err, "Cannot multiplicate l2 and w3")
-	}
-	a3, err = gorgonia.Rectify(fc)
-	if err != nil {
-		return errors.Wrap(err, "Cannot activate fc")
-	}
-	l3, err = gorgonia.Dropout(a3, m.d3)
-	if err != nil {
-		return errors.Wrap(err, "Cannot Dropout Layer3")
-	}
-
-	// output decode
-	var out *gorgonia.Node
-	out, err = gorgonia.Mul(l3, m.w4)
-	if err != nil {
-		return errors.Wrap(err, "Cannot multiplicate l3 and w4")
-	}
-	m.Out, err = gorgonia.SoftMax(out)
-	if err != nil {
-		return errors.Wrap(err, "Cannot softmax output")
+	for i := 1; i < len(net.Layers); i++ {
+		layerNonActivated, err := net.Layers[i].Fwd(lastActivatedLayer)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("Can't feedforward Layer #%d", i))
+		}
+		layerActivated, err := net.Layers[i].Activation(layerNonActivated)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("Can't apply activation function to Layer #%d", i))
+		}
+		net.Layers[i].output = layerActivated
+		lastActivatedLayer = layerActivated
+		if i == len(net.Layers)-1 {
+			net.out = layerActivated
+		}
 	}
 
 	return nil

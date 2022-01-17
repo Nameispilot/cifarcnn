@@ -2,119 +2,184 @@ package main
 
 import (
 	"cifarcnn"
-	"log"
-	"os"
+	"fmt"
 
 	"gorgonia.org/gorgonia"
 	"gorgonia.org/tensor"
 )
 
+var (
+	learning_rate = 0.01
+	batchSize     = 1
+	imgHeight     = 6
+	imgWidth      = 4
+	imgChannels   = 1
+	classes       = 3
+	imgShape      = []int{batchSize, imgChannels, imgHeight, imgWidth}
+
+	zero_image_label = tensor.New(tensor.WithShape(classes), tensor.WithBacking([]float64{1, 0, 0}))
+	zero_image       = tensor.New(tensor.WithShape(imgShape...), tensor.WithBacking([]float64{
+		0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+	}))
+
+	one_image_label = tensor.New(tensor.WithShape(classes), tensor.WithBacking([]float64{0, 1, 0}))
+	one_image       = tensor.New(tensor.WithShape(imgShape...), tensor.WithBacking([]float64{
+		0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1,
+	}))
+
+	two_image_label = tensor.New(tensor.WithShape(classes), tensor.WithBacking([]float64{0, 0, 1}))
+	two_image       = tensor.New(tensor.WithShape(imgShape...), tensor.WithBacking([]float64{
+		1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1,
+	}))
+)
+
 func main() {
-	f, err := os.Open("data_batch_1.bin")
-	if err != nil {
-		panic(err)
-	}
-	inputs, targets, err := cifarcnn.Load(f)
-	if err != nil {
-		panic(err)
-	}
-
-	// Creating a net
-	kernelSize := 5
-	depth := 3
-	classes := 10
-	length := 32
 	g := gorgonia.NewGraph()
-	convnet := cifarcnn.NewCNN(g, length, kernelSize, depth, classes)
 
-	bs := 100
-	x := gorgonia.NewTensor(g, tensor.Float64, 4, gorgonia.WithShape(bs, depth, length, length), gorgonia.WithName("x"))
-	y := gorgonia.NewMatrix(g, tensor.Float64, gorgonia.WithShape(bs, classes), gorgonia.WithName("y"))
+	kernelSize := 3
+	cnn := cifarcnn.BuildCNN(g, kernelSize, imgChannels, classes)
 
-	// feed forward proccess
-	if err = convnet.Fwd(x); err != nil {
-		panic(err)
-	}
-
-	// Defining cost
-	var logprob, losses, cost *gorgonia.Node
-	logprob, err = gorgonia.Log(convnet.Out)
-	if err != nil {
-		panic(err)
-	}
-	losses, err = gorgonia.HadamardProd(logprob, y)
-	if err != nil {
-		panic(err)
-	}
-	cost, err = gorgonia.Sum(losses)
-	if err != nil {
-		panic(err)
-	}
-	cost, err = gorgonia.Neg(cost)
+	// preparing input node
+	input := gorgonia.NewTensor(g, gorgonia.Float64, 4, gorgonia.WithShape(imgShape...), gorgonia.WithName("cnn_input_"))
+	err := cnn.Fwd(input)
 	if err != nil {
 		panic(err)
 	}
 
-	// Track costs
-	var costVal gorgonia.Value
-	gorgonia.Read(cost, &costVal)
+	// preparing labels node
+	target := gorgonia.NewTensor(g, gorgonia.Float64, 1, gorgonia.WithShape(classes), gorgonia.WithName("cnn_labels_"))
 
-	// Defining gradients
-	_, err = gorgonia.Grad(cost, convnet.Learnables()...)
+	losses, _ := gorgonia.Sub(cnn.Out(), target)
+	square, _ := gorgonia.Square(losses)
+	cost, _ := gorgonia.Mean(square)
+
+	//defining gradients
+	_, err = gorgonia.Grad(cost, cnn.Learnables()...)
 	if err != nil {
 		panic(err)
 	}
 
-	tm := gorgonia.NewTapeMachine(g, gorgonia.BindDualValues(convnet.Learnables()...))
+	// tracking out value
+	var cnnOut gorgonia.Value
+	gorgonia.Read(cnn.Out(), &cnnOut)
+
+	// creating a tape machine
+	tm := gorgonia.NewTapeMachine(g, gorgonia.BindDualValues(cnn.Learnables()...))
 	defer tm.Close()
-	solver := gorgonia.NewRMSPropSolver(gorgonia.WithBatchSize(float64(bs)))
 
-	// training
-	numExamples := inputs.Shape()[0]
-	batches := numExamples / bs
-	epochs := 10
+	// defining solver
+	solver := gorgonia.NewRMSPropSolver(gorgonia.WithBatchSize(float64(batchSize)), gorgonia.WithLearnRate(learning_rate))
+
+	/* training */
+	epochs := 500
 	for i := 0; i < epochs; i++ {
-		for b := 0; b < batches; b++ {
-			start := b * bs
-			end := start + bs
-			if start >= numExamples {
-				break
-			}
-			if end > numExamples {
-				end = numExamples
-			}
-
-			var xVal, yVal tensor.Tensor
-			if xVal, err = inputs.Slice(sli{start, end}); err != nil {
-				log.Fatal("Unable to slice x")
-			}
-
-			if yVal, err = targets.Slice(sli{start, end}); err != nil {
-				log.Fatal("Unable to slice y")
-			}
-			if err = xVal.(*tensor.Dense).Reshape(bs, depth, length, length); err != nil {
-				log.Fatalf("Unable to reshape %v", err)
-			}
-
-			gorgonia.Let(x, xVal)
-			gorgonia.Let(y, yVal)
-			if err = tm.RunAll(); err != nil {
-				log.Fatalf("Failed at epoch  %d: %v", i, err)
-			}
-
-			solver.Step(gorgonia.NodesToValueGrads(convnet.Learnables()))
-			tm.Reset()
+		// zero
+		err := gorgonia.Let(input, zero_image)
+		if err != nil {
+			panic(err)
 		}
-		log.Printf("Epoch %d | cost %v", i, costVal)
+		err = gorgonia.Let(target, zero_image_label)
+		if err != nil {
+			panic(err)
+		}
+
+		err = tm.RunAll()
+		if err != nil {
+			panic(err)
+		}
+
+		err = solver.Step(gorgonia.NodesToValueGrads(cnn.Learnables()))
+		if err != nil {
+			panic(err)
+		}
+		tm.Reset()
+
+		// one
+		err = gorgonia.Let(input, one_image)
+		if err != nil {
+			panic(err)
+		}
+		err = gorgonia.Let(target, one_image_label)
+		if err != nil {
+			panic(err)
+		}
+
+		err = tm.RunAll()
+		if err != nil {
+			panic(err)
+		}
+
+		err = solver.Step(gorgonia.NodesToValueGrads(cnn.Learnables()))
+		if err != nil {
+			panic(err)
+		}
+		tm.Reset()
+
+		// two
+		err = gorgonia.Let(input, two_image)
+		if err != nil {
+			panic(err)
+		}
+		err = gorgonia.Let(target, two_image_label)
+		if err != nil {
+			panic(err)
+		}
+
+		err = tm.RunAll()
+		if err != nil {
+			panic(err)
+		}
+
+		err = solver.Step(gorgonia.NodesToValueGrads(cnn.Learnables()))
+		if err != nil {
+			panic(err)
+		}
+		tm.Reset()
 
 	}
 
-}
+	/* Testing */
+	fmt.Println("------------------RESULTS------------------")
+	// zero
+	err = gorgonia.Let(input, zero_image)
+	if err != nil {
+		panic(err)
+	}
+	err = tm.RunAll()
+	if err != nil {
+		panic(err)
+	}
+	tm.Reset()
 
-type sli struct {
-	start, end int
-}
+	fmt.Print("'0'\t[1, 0, 0] ")
+	fmt.Printf("%.2f\n", cnnOut.Data())
 
-func (s sli) Start() int { return s.start }
-func (s sli) End() int   { return s.end }
-func (s sli) Step() int  { return 1 }
+	// one
+	err = gorgonia.Let(input, one_image)
+	if err != nil {
+		panic(err)
+	}
+	err = tm.RunAll()
+	if err != nil {
+		panic(err)
+	}
+	tm.Reset()
+
+	fmt.Print("'1'\t[0, 1, 0] ")
+	fmt.Printf("%.2f\n", cnnOut.Data())
+
+	// two
+	err = gorgonia.Let(input, two_image)
+	if err != nil {
+		panic(err)
+	}
+	err = tm.RunAll()
+	if err != nil {
+		panic(err)
+	}
+	tm.Reset()
+
+	fmt.Print("'2'\t[0, 0, 1] ")
+	fmt.Printf("%.2f\n", cnnOut.Data())
+
+}
